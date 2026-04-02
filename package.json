@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "description": "A protocol that is binary (fast) AND human-readable/debuggable",
   "main": "src/index.js",
+  "bin": {
+    "hrbp": "bin/hrbp.js"
+  },
   "scripts": {
-    "test": "node --test 'tests/*.test.js'"
+    "test": "node --test 'tests/*.test.js'",
+    "bench": "node benchmarks/bench.js"
   },
   "keywords": [
     "binary",

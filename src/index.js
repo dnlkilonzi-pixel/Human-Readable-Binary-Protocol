@@ -40,6 +40,12 @@ const { validate, encodeWithSchema, decodeWithSchema } = require('./schema');
 const { encodeVersioned, decodeVersioned, CURRENT_VERSION, MAX_SUPPORTED_VERSION } = require('./versioned');
 const { compress, decompress, encodeCompressed, decodeCompressed } = require('./compress');
 const { StreamDecoder } = require('./stream');
+const { frameEncode, FrameDecoder } = require('./framing');
+const { HRBPServer, HRBPConnection } = require('./tcp/server');
+const { HRBPClient } = require('./tcp/client');
+const { HRBPRpcServer } = require('./rpc/server');
+const { HRBPRpcClient } = require('./rpc/client');
+const { makeCall, makeReply, makeError, encodeEnvelope, decodeEnvelope } = require('./rpc/protocol');
 
 module.exports = {
   // Core
@@ -56,6 +62,13 @@ module.exports = {
   compress, decompress, encodeCompressed, decodeCompressed,
   // Streaming
   StreamDecoder,
+  // Framing
+  frameEncode, FrameDecoder,
+  // TCP transport
+  HRBPServer, HRBPConnection, HRBPClient,
+  // RPC layer
+  HRBPRpcServer, HRBPRpcClient,
+  makeCall, makeReply, makeError, encodeEnvelope, decodeEnvelope,
   // Error types
   IncompleteBufferError,
 };

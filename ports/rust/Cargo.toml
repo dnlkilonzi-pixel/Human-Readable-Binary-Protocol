@@ -1,0 +1,10 @@
+[package]
+name = "hrbp"
+version = "0.1.0"
+edition = "2021"
+description = "Human-Readable Binary Protocol — Rust port"
+license = "MIT"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
