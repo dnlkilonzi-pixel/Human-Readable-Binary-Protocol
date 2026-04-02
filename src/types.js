@@ -20,6 +20,7 @@
  * |  [  | 0x5B | Array     | 4-byte uint32 element count + elements       |
  * |  {  | 0x7B | Object    | 4-byte uint32 pair count + key-value pairs   |
  * |  B  | 0x42 | Buffer    | 4-byte uint32 byte length + raw bytes        |
+ * |  H  | 0x48 | (header)  | 1-byte protocol version (versioned frames)   |
  */
 const TAG = Object.freeze({
   INT32:  0x49, // 'I'
@@ -31,6 +32,7 @@ const TAG = Object.freeze({
   ARRAY:  0x5B, // '['
   OBJECT: 0x7B, // '{'
   BUFFER: 0x42, // 'B'
+  HEADER: 0x48, // 'H'
 });
 
 /** Reverse map: byte value → tag name (for error messages and inspection). */

@@ -13,6 +13,17 @@
 const { TAG, TAG_NAME } = require('./types');
 
 // ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when the buffer ends before a complete value has been read.
+ * Extends RangeError so existing `catch (e instanceof RangeError)` code
+ * continues to work, while the StreamDecoder can detect this specific case.
+ */
+class IncompleteBufferError extends RangeError {}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -147,11 +158,11 @@ function decodeAt(buffer, offset) {
 
 function assertBounds(buffer, offset, needed) {
   if (offset + needed > buffer.length) {
-    throw new RangeError(
+    throw new IncompleteBufferError(
       `Buffer too short: need ${needed} byte(s) at offset ${offset}, ` +
       `but buffer length is ${buffer.length}`
     );
   }
 }
 
-module.exports = { decode, decodeAll };
+module.exports = { decode, decodeAll, decodeAt, IncompleteBufferError };

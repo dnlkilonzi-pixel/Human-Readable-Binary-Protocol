@@ -33,8 +33,29 @@
  */
 
 const { encode } = require('./encoder');
-const { decode, decodeAll } = require('./decoder');
+const { decode, decodeAll, IncompleteBufferError } = require('./decoder');
 const { inspect, hexDump } = require('./inspector');
 const { TAG, TAG_NAME } = require('./types');
+const { validate, encodeWithSchema, decodeWithSchema } = require('./schema');
+const { encodeVersioned, decodeVersioned, CURRENT_VERSION, MAX_SUPPORTED_VERSION } = require('./versioned');
+const { compress, decompress, encodeCompressed, decodeCompressed } = require('./compress');
+const { StreamDecoder } = require('./stream');
 
-module.exports = { encode, decode, decodeAll, inspect, hexDump, TAG, TAG_NAME };
+module.exports = {
+  // Core
+  encode, decode, decodeAll,
+  // Inspection
+  inspect, hexDump,
+  // Constants
+  TAG, TAG_NAME,
+  // Schema layer
+  validate, encodeWithSchema, decodeWithSchema,
+  // Versioning
+  encodeVersioned, decodeVersioned, CURRENT_VERSION, MAX_SUPPORTED_VERSION,
+  // Compression
+  compress, decompress, encodeCompressed, decodeCompressed,
+  // Streaming
+  StreamDecoder,
+  // Error types
+  IncompleteBufferError,
+};
