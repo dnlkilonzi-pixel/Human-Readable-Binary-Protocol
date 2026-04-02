@@ -47,6 +47,27 @@ const { HRBPRpcServer } = require('./rpc/server');
 const { HRBPRpcClient } = require('./rpc/client');
 const { makeCall, makeReply, makeError, encodeEnvelope, decodeEnvelope } = require('./rpc/protocol');
 
+// Backpressure / Flow control
+const { BackpressureController, DEFAULT_HIGH_WATER_MARK, DEFAULT_MAX_MESSAGE_SIZE } = require('./backpressure');
+
+// Security
+const { HRBPSecureServer, HRBPSecureClient, HRBPSecureConnection } = require('./security/tls');
+const { createAuthMiddleware, createRateLimiter } = require('./security/auth');
+const { createSigner, createVerifier, HMAC_SIZE } = require('./security/signing');
+
+// IDL / Schema contracts
+const { parseIDL, typeToSchema, buildContracts, createContractValidator, generateClientStub } = require('./idl/index');
+
+// Service discovery
+const { ServiceRegistry } = require('./discovery/registry');
+const { LoadBalancer } = require('./discovery/loadbalancer');
+const { attachHealthCheck } = require('./discovery/health');
+
+// Observability
+const { Tracer, InMemoryCollector } = require('./observability/tracing');
+const { MetricsCollector } = require('./observability/metrics');
+const { Logger, LEVELS: LOG_LEVELS } = require('./observability/logger');
+
 module.exports = {
   // Core
   encode, decode, decodeAll,
@@ -69,6 +90,20 @@ module.exports = {
   // RPC layer
   HRBPRpcServer, HRBPRpcClient,
   makeCall, makeReply, makeError, encodeEnvelope, decodeEnvelope,
+  // Backpressure
+  BackpressureController, DEFAULT_HIGH_WATER_MARK, DEFAULT_MAX_MESSAGE_SIZE,
+  // Security – TLS
+  HRBPSecureServer, HRBPSecureClient, HRBPSecureConnection,
+  // Security – Auth
+  createAuthMiddleware, createRateLimiter,
+  // Security – Signing
+  createSigner, createVerifier, HMAC_SIZE,
+  // IDL / Contracts
+  parseIDL, typeToSchema, buildContracts, createContractValidator, generateClientStub,
+  // Service discovery
+  ServiceRegistry, LoadBalancer, attachHealthCheck,
+  // Observability
+  Tracer, InMemoryCollector, MetricsCollector, Logger, LOG_LEVELS,
   // Error types
   IncompleteBufferError,
 };

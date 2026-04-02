@@ -8,12 +8,18 @@
  * arrives the handler is awaited, and the result (or error) is sent back with
  * the matching request id — exactly like a mini gRPC server.
  *
+ * Middleware:
+ *   Use `server.use(fn)` to register middleware functions that run before
+ *   each handler.  Each middleware receives `(envelope, conn)` and must
+ *   return the (possibly modified) envelope to continue, or throw to reject.
+ *
  * Usage:
  *
  *   const { HRBPRpcServer } = require('./rpc/server');
  *
  *   const rpc = new HRBPRpcServer();
  *
+ *   rpc.use(authMiddleware);
  *   rpc.handle('add', async ({ a, b }) => a + b);
  *   rpc.handle('getUser', async ({ id }) => ({ id, name: 'Alice' }));
  *
@@ -26,12 +32,28 @@ const { makeReply, makeError } = require('./protocol');
 class HRBPRpcServer {
   constructor() {
     this._handlers = new Map();
+    this._middleware = [];
     this._server = new HRBPServer();
 
     this._server.on('connection', (conn) => {
       conn.on('message', async (envelope) => {
         if (!envelope || envelope.type !== 'call') return;
         const { id, method, params } = envelope;
+
+        // Run middleware chain
+        let processed = envelope;
+        for (const mw of this._middleware) {
+          try {
+            processed = await mw(processed, conn);
+            if (!processed) {
+              conn.send(makeError(id, 'Request rejected by middleware'));
+              return;
+            }
+          } catch (e) {
+            conn.send(makeError(id, e && e.message ? e.message : String(e)));
+            return;
+          }
+        }
 
         const handler = this._handlers.get(method);
         if (!handler) {
@@ -40,7 +62,7 @@ class HRBPRpcServer {
         }
 
         try {
-          const result = await handler(params);
+          const result = await handler(processed.params);
           conn.send(makeReply(id, result));
         } catch (e) {
           conn.send(makeError(id, e && e.message ? e.message : String(e)));
@@ -50,6 +72,21 @@ class HRBPRpcServer {
 
     // Forward server errors.
     this._server.on('error', (e) => this.emit && this.emit('error', e));
+  }
+
+  /**
+   * Register a middleware function.
+   *
+   * Middleware runs in order before the handler.  Each receives
+   * `(envelope, conn)` and must return the envelope (or a modified copy)
+   * to continue, or throw to reject the call.
+   *
+   * @param {Function} fn  `async (envelope, conn) => envelope`
+   * @returns {this}
+   */
+  use(fn) {
+    this._middleware.push(fn);
+    return this;
   }
 
   /**
