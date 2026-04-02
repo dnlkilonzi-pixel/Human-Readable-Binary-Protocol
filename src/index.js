@@ -68,6 +68,18 @@ const { Tracer, InMemoryCollector } = require('./observability/tracing');
 const { MetricsCollector } = require('./observability/metrics');
 const { Logger, LEVELS: LOG_LEVELS } = require('./observability/logger');
 
+// Chaos testing
+const { ChaosProxy, createFaultInjector, corruptBuffer } = require('./chaos');
+
+// Cluster / Horizontal scaling
+const { ConsistentHash, ClusterCoordinator } = require('./cluster');
+
+// Persistence
+const { WAL, RegistryStore, StateStore } = require('./persistence');
+
+// Configuration
+const { Config, deepMerge } = require('./config');
+
 module.exports = {
   // Core
   encode, decode, decodeAll,
@@ -104,6 +116,14 @@ module.exports = {
   ServiceRegistry, LoadBalancer, attachHealthCheck,
   // Observability
   Tracer, InMemoryCollector, MetricsCollector, Logger, LOG_LEVELS,
+  // Chaos testing
+  ChaosProxy, createFaultInjector, corruptBuffer,
+  // Cluster / Horizontal scaling
+  ConsistentHash, ClusterCoordinator,
+  // Persistence
+  WAL, RegistryStore, StateStore,
+  // Configuration
+  Config, deepMerge,
   // Error types
   IncompleteBufferError,
 };
