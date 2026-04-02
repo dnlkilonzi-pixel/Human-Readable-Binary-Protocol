@@ -1,0 +1,17 @@
+{
+  "name": "human-readable-binary-protocol",
+  "version": "1.0.0",
+  "description": "A protocol that is binary (fast) AND human-readable/debuggable",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test 'tests/*.test.js'"
+  },
+  "keywords": [
+    "binary",
+    "protocol",
+    "serialization",
+    "human-readable",
+    "encoding"
+  ],
+  "license": "MIT"
+}
