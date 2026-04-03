@@ -1,0 +1,45 @@
+# HRBP Docker Compose — multi-node example
+#
+# Start:  docker compose up
+# Scale:  docker compose up --scale worker=3
+
+services:
+  # ── Registry node ──────────────────────────────────────────────────────
+  registry:
+    build: .
+    command: ["node", "-e", "
+      const { HRBPRpcServer, ServiceRegistry, attachHealthCheck } = require('./src/index');
+      const registry = new ServiceRegistry();
+      const server = new HRBPRpcServer();
+      attachHealthCheck(server, { serviceName: 'registry' });
+      server.handle('register', async (p) => registry.register(p));
+      server.handle('lookup', async (p) => registry.lookup(p.name, p.filter || {}));
+      server.handle('heartbeat', async (p) => registry.heartbeat(p.name, p.id));
+      server.listen(7001, '0.0.0.0', () => console.log('Registry on :7001'));
+    "]
+    ports:
+      - "7001:7001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const n=require('net');const s=n.connect(7001,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Worker node (scalable) ─────────────────────────────────────────────
+  worker:
+    build: .
+    command: ["node", "-e", "
+      const { HRBPRpcServer, attachHealthCheck, MetricsCollector } = require('./src/index');
+      const metrics = new MetricsCollector();
+      const server = new HRBPRpcServer();
+      attachHealthCheck(server, { serviceName: 'worker' });
+      server.handle('echo', async (p) => p);
+      server.handle('add', async ({a,b}) => a + b);
+      server.handle('__metrics', async () => metrics.snapshot());
+      server.listen(7001, '0.0.0.0', () => console.log('Worker on :7001'));
+    "]
+    deploy:
+      replicas: 2
+    depends_on:
+      registry:
+        condition: service_healthy
