@@ -64,7 +64,12 @@ class HRBPRpcServer {
         try {
           const result = await handler(processed.params);
           conn.send(makeReply(id, result));
+          if (processed._span) processed._span.finish();
         } catch (e) {
+          if (processed._span) {
+            processed._span.setError(e);
+            processed._span.finish();
+          }
           conn.send(makeError(id, e && e.message ? e.message : String(e)));
         }
       });
