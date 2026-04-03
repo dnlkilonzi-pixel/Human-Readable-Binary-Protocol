@@ -4,13 +4,20 @@ A protocol that is **binary** (fast, compact) **and** human-readable / debuggabl
 
 ---
 
-## The Problem
+## Why HRBP?
 
-| Format | Speed | Readability |
-|--------|-------|-------------|
-| Pure binary (e.g. MessagePack) | ✅ Fast | ❌ Opaque hex dump |
-| Pure text (e.g. JSON) | ❌ Slower | ✅ Readable |
-| **HRBP** | ✅ Fast | ✅ Readable |
+| Concern | JSON | MessagePack / Protobuf | **HRBP** |
+|---------|------|------------------------|----------|
+| Wire speed | ❌ Slower (text parsing) | ✅ Fast | ✅ Fast |
+| Human readability | ✅ Readable | ❌ Opaque binary | ✅ Readable in any hex dump |
+| External tooling needed | ❌ No binary support | ✅ Requires schema/decoder | ✅ None — ASCII tags visible inline |
+| Schema / IDL | ❌ None built-in | ✅ Protobuf IDL | ✅ Built-in IDL + schema validation |
+| Built-in RPC | ❌ No | ❌ Needs gRPC layer | ✅ Native RPC layer |
+| Observability | ❌ No | ❌ No | ✅ Tracing, metrics, structured logs |
+| Chaos testing | ❌ No | ❌ No | ✅ Built-in fault injector + chaos proxy |
+| Production persistence | ❌ No | ❌ No | ✅ WAL + state store |
+| Horizontal scaling | ❌ No | ❌ No | ✅ Consistent hash ring + cluster coordinator |
+| Zero dependencies | ✅ Yes | ❌ Schema compiler | ✅ Yes — Node.js built-ins only |
 
 HRBP uses **printable ASCII characters as 1-byte type tags**.  The result is a
 binary buffer where the *structure* is immediately visible in any hex dump,
@@ -40,7 +47,65 @@ Numbers that are integers fitting in `[-2^31, 2^31-1]` are encoded as `I`
 
 ---
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          HRBP Production Stack                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│  CLI (bin/hrbp.js)        inspect · hexdump · encode · decode           │
+│                           serve · ping                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Developer Tools          IDL / contracts · schema · inspector          │
+├─────────────────────────────────────────────────────────────────────────┤
+│  RPC Layer                HRBPRpcServer · HRBPRpcClient                  │
+│    middleware chain       auth · rate-limit · signing · tracing          │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Observability            Tracer (spans) · MetricsCollector · Logger    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Service Discovery        ServiceRegistry · LoadBalancer · HealthCheck  │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Cluster / Scaling        ConsistentHash · ClusterCoordinator           │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Persistence              WAL · RegistryStore · StateStore              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Security                 TLS · HMAC signing · token auth               │
+├─────────────────────────────────────────────────────────────────────────┤
+│  TCP Transport            HRBPServer · HRBPClient · BackpressureCtrl    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Framing / Codec          frameEncode · FrameDecoder · StreamDecoder    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Core Codec               encode · decode · inspect · hexDump           │
+│                           versioned · compress · schema                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow: RPC call with tracing and persistence
+
+```
+Client                  Server (RPC layer)               Backends
+──────                  ──────────────────               ────────
+call('add', {a,b})
+  │ encode envelope
+  │ ──────────────────►
+  │                     middleware chain
+  │                       1. auth / signing check
+  │                       2. rate-limiter
+  │                       3. tracer.startSpan('add')  ──► InMemoryCollector
+  │                       4. logger.info('rpc:call')  ──► structured log sink
+  │                     handler: add({a,b}) → result
+  │                     span.finish()                 ──► collector records span
+  │                     wal.append({method, result})  ──► WAL file (crash-safe)
+  │                     metrics.recordCall('add', ms)
+  │ ◄──────────────────
+  result = a + b
+```
+
+---
+
 ## Quick Start
+
+### Core codec
 
 ```js
 const { encode, decode, inspect, hexDump } = require('./src/index');
@@ -70,6 +135,123 @@ console.log(hexDump(buf));
 // 00000020  49 00 00 00 1e 53 00 00  00 06 61 63 74 69 76 65  |I....S....active|
 // 00000030  54                                                 |T|
 ```
+
+### RPC server and client
+
+```js
+const { HRBPRpcServer, HRBPRpcClient, attachHealthCheck } = require('./src/index');
+
+// Server
+const server = new HRBPRpcServer();
+attachHealthCheck(server, { serviceName: 'calc' });
+server.handle('add', async ({ a, b }) => a + b);
+server.listen(7001, '127.0.0.1', () => console.log('RPC server on :7001'));
+
+// Client
+const client = new HRBPRpcClient();
+client.connect(7001, '127.0.0.1', async () => {
+  const result = await client.call('add', { a: 10, b: 20 });
+  console.log(result); // 30
+  client.close();
+  server.close();
+});
+```
+
+### Observability middleware
+
+```js
+const { HRBPRpcServer, Tracer, InMemoryCollector, MetricsCollector, Logger } = require('./src/index');
+
+const collector = new InMemoryCollector();
+const tracer    = new Tracer({ collector });
+const metrics   = new MetricsCollector();
+const logger    = new Logger({ level: 'info' });
+
+const server = new HRBPRpcServer();
+
+server.use(async (envelope) => {
+  const span = tracer.startSpan(envelope.method);
+  envelope._span = span;
+  logger.info('rpc:call', { method: envelope.method });
+  return envelope;
+});
+
+server.handle('greet', async ({ name }) => `Hello, ${name}!`);
+server.listen(7001);
+```
+
+### Chaos testing
+
+```js
+const { ChaosProxy, HRBPRpcClient } = require('./src/index');
+
+// Sit a chaos proxy in front of a real server
+const proxy = new ChaosProxy({
+  target: { host: '127.0.0.1', port: 7001 },
+  latency: { min: 20, max: 80 },   // inject 20–80 ms delay
+  dropRate: 0.05,                   // 5% packet loss
+  corruptRate: 0.01,                // 1% frame corruption
+});
+
+await proxy.listen(9001);
+
+// Point your clients at the proxy port instead
+const client = new HRBPRpcClient();
+client.connect(9001, '127.0.0.1', async () => {
+  const result = await client.call('add', { a: 1, b: 2 });
+  console.log(result); // 3 (or an error if a fault triggered)
+  await proxy.close();
+  client.close();
+});
+```
+
+### Service discovery + load balancing
+
+```js
+const { ServiceRegistry, LoadBalancer } = require('./src/index');
+
+const registry = new ServiceRegistry();
+registry.register({ name: 'calc', host: '10.0.0.1', port: 7001 });
+registry.register({ name: 'calc', host: '10.0.0.2', port: 7001 });
+
+const lb = new LoadBalancer({ strategy: 'round-robin' });
+for (const inst of registry.lookup('calc')) {
+  lb.addInstance({ host: inst.host, port: inst.port });
+}
+
+const target = lb.pick(); // { host: '10.0.0.1', port: 7001 }
+```
+
+### Horizontal scaling (consistent hashing)
+
+```js
+const { ConsistentHash, ClusterCoordinator } = require('./src/index');
+
+const ring = new ConsistentHash(150); // 150 virtual nodes per real node
+ring.addNode('node-1');
+ring.addNode('node-2');
+ring.addNode('node-3');
+
+const target = ring.getNode('user:42'); // deterministic, stable routing
+```
+
+### Persistence (WAL + state store)
+
+```js
+const { WAL, StateStore } = require('./src/index');
+
+const wal = new WAL('/var/data/hrbp.wal');
+await wal.open();
+await wal.append({ type: 'call', method: 'add', params: { a: 1, b: 2 } });
+
+const entries = await wal.replay(); // recover on restart
+
+const store = new StateStore('/var/data/hrbp-state');
+await store.open();
+await store.set('config', { maxConns: 100 });
+const cfg = await store.get('config'); // { maxConns: 100 }
+```
+
 
 ---
 
@@ -278,8 +460,37 @@ if unconsumed bytes remain, then emits `'end'`.
 npm test
 ```
 
-The test suite (**164 tests**) uses Node.js's built-in `node:test` runner — no
-extra dependencies required.
+The test suite uses Node.js's built-in `node:test` runner — no extra dependencies required.  362 tests across 84 suites covering every module.
+
+---
+
+## CLI
+
+```sh
+# Inspect the structure of an HRBP binary file
+hrbp inspect  message.bin
+
+# Annotated hex dump
+hrbp hexdump  message.bin
+
+# Decode to JSON
+hrbp decode   message.bin
+
+# Encode JSON to HRBP binary
+hrbp encode --json '{"name":"Alice","age":30}' > out.bin
+
+# Start a minimal RPC echo server for manual testing
+hrbp serve --port 7001
+
+# Ping an RPC server to check liveness
+hrbp ping --host 127.0.0.1 --port 7001
+
+# Print the protocol version
+hrbp version
+
+# All commands accept stdin when no file is given
+cat out.bin | hrbp inspect
+```
 
 ---
 
@@ -287,22 +498,62 @@ extra dependencies required.
 
 ```
 src/
-  types.js      – TAG constants and reverse TAG_NAME map
-  encoder.js    – encode()  – JS value → Buffer
-  decoder.js    – decode() / decodeAll() / decodeAt()  – Buffer → JS value
-  inspector.js  – inspect() / hexDump()  – Buffer → human-readable string
-  schema.js     – validate() / encodeWithSchema() / decodeWithSchema()
-  versioned.js  – encodeVersioned() / decodeVersioned()
-  compress.js   – compress() / decompress() / encodeCompressed() / decodeCompressed()
-  stream.js     – StreamDecoder (incremental streaming decoder)
-  index.js      – public API re-exports
+  types.js               – TAG constants and reverse TAG_NAME map
+  encoder.js             – encode()
+  decoder.js             – decode() / decodeAll() / decodeAt()
+  inspector.js           – inspect() / hexDump()
+  schema.js              – validate() / encodeWithSchema() / decodeWithSchema()
+  versioned.js           – encodeVersioned() / decodeVersioned()
+  compress.js            – gzip encode/decode helpers
+  stream.js              – StreamDecoder (incremental streaming decoder)
+  framing.js             – frameEncode() / FrameDecoder (length-prefixed framing)
+  backpressure.js        – BackpressureController (high-water-mark flow control)
+  tcp/
+    server.js            – HRBPServer (TCP listener, auto-frames HRBP messages)
+    client.js            – HRBPClient (TCP client)
+  rpc/
+    server.js            – HRBPRpcServer (middleware + named handlers)
+    client.js            – HRBPRpcClient (call / await pattern)
+    protocol.js          – makeCall / makeReply / makeError envelope builders
+  observability/
+    tracing.js           – Tracer / SpanImpl / InMemoryCollector
+    metrics.js           – MetricsCollector (call counts, latency histograms)
+    logger.js            – Logger (structured, level-filtered, pluggable sink)
+  discovery/
+    registry.js          – ServiceRegistry (TTL-based in-memory registry)
+    loadbalancer.js      – LoadBalancer (round-robin / random / least-pending)
+    health.js            – attachHealthCheck() (__health RPC handler)
+  cluster.js             – ConsistentHash / ClusterCoordinator
+  persistence.js         – WAL / RegistryStore / StateStore
+  chaos.js               – ChaosProxy / createFaultInjector / corruptBuffer
+  security/
+    tls.js               – HRBPSecureServer / HRBPSecureClient
+    auth.js              – createAuthMiddleware / createRateLimiter
+    signing.js           – createSigner / createVerifier (HMAC)
+  idl/
+    parser.js            – IDL language parser
+    index.js             – parseIDL / buildContracts / generateClientStub
+  config.js              – Config (env + file overlay system)
+  index.js               – public API re-exports
+
+bin/
+  hrbp.js                – DevTools CLI
+
 tests/
-  encoder.test.js
-  decoder.test.js
-  inspector.test.js
-  schema.test.js
-  versioned.test.js
-  compress.test.js
-  stream.test.js
+  encoder.test.js        decoder.test.js    inspector.test.js
+  schema.test.js         versioned.test.js  compress.test.js
+  stream.test.js         tcp.test.js        rpc.test.js
+  backpressure.test.js   security.test.js   idl.test.js
+  observability.test.js  discovery.test.js  cluster.test.js
+  persistence.test.js    chaos.test.js      config.test.js
+  cli.test.js            e2e.test.js        scenarios.test.js
+
+ports/
+  python/hrbp.py         – pure-Python codec
+  c/hrbp.h               – single-header C codec
+  rust/src/lib.rs        – Rust crate
+
+benchmarks/
+  bench.js               – encode/decode throughput benchmark
 ```
 
