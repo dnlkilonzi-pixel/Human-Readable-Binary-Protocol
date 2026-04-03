@@ -10,26 +10,26 @@ _msgpack_ results appear only when `@msgpack/msgpack` is installed.
 
 | Codec | Phase | ops/sec | avg µs | bytes |
 |-------|-------|--------:|-------:|------:|
-| HRBP | encode | 679,092 | 1.473 | 36 |
-| HRBP | decode | 1,717,225 | 0.582 | 36 |
-| JSON | encode | 5,389,867 | 0.186 | 23 |
-| JSON | decode | 3,761,821 | 0.266 | 23 |
+| HRBP | encode | 771,251 | 1.297 | 36 |
+| HRBP | decode | 2,206,859 | 0.453 | 36 |
+| JSON | encode | 7,020,276 | 0.142 | 23 |
+| JSON | decode | 3,981,410 | 0.251 | 23 |
 
 ## medium object (100k)
 
 | Codec | Phase | ops/sec | avg µs | bytes |
 |-------|-------|--------:|-------:|------:|
-| HRBP | encode | 20,224 | 49.447 | 1990 |
-| HRBP | decode | 38,107 | 26.242 | 1990 |
-| JSON | encode | 214,602 | 4.660 | 1581 |
-| JSON | decode | 137,968 | 7.248 | 1581 |
+| HRBP | encode | 25,113 | 39.820 | 1990 |
+| HRBP | decode | 45,524 | 21.966 | 1990 |
+| JSON | encode | 240,343 | 4.161 | 1581 |
+| JSON | decode | 145,281 | 6.883 | 1581 |
 
 ## array of 1 000 ints
 
 | Codec | Phase | ops/sec | avg µs | bytes |
 |-------|-------|--------:|-------:|------:|
-| HRBP | encode | 13,014 | 76.841 | 5005 |
-| HRBP | decode | 68,841 | 14.526 | 5005 |
-| JSON | encode | 95,913 | 10.426 | 3891 |
-| JSON | decode | 96,206 | 10.394 | 3891 |
+| HRBP | encode | 14,551 | 68.722 | 5005 |
+| HRBP | decode | 65,464 | 15.275 | 5005 |
+| JSON | encode | 99,325 | 10.068 | 3891 |
+| JSON | decode | 94,366 | 10.597 | 3891 |
 
