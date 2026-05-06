@@ -26,9 +26,56 @@
 
 ## What Is HRBP?
 
-HRBP is a binary serialisation and RPC protocol where every type tag is a **printable ASCII character** (`I`, `S`, `{`, `[`, ...).  Raw wire bytes are **partially human-readable in any hex dump** with no decoder needed.
+HRBP is a **debuggable binary format** — every type tag is a printable ASCII character (`I`, `S`, `{`, `[`, ...) so raw wire bytes are **partially human-readable in any hex dump with no decoder needed**.
 
-On top of the core codec sits a complete production stack: TCP transport, RPC layer, distributed tracing, metrics, structured logging, service discovery, load balancing, consistent-hash clustering, write-ahead log persistence, TLS security, HMAC signing, and a chaos-testing framework — **all with zero runtime dependencies**.
+```
+encode({ name: 'Alice', age: 30 })
+
+00000000  7b 00 00 00 02 53 00 00  00 04 6e 61 6d 65 53 00  |{....S....nameS.|
+00000010  00 00 05 41 6c 69 63 65  49 00 00 00 1e            |...AliceI...|
+          ^^                        ^^                        ^^
+          {  = OBJECT tag           S  = STRING tag           I  = INT32 tag
+```
+
+Start here for the simplest use — then adopt the RPC / clustering stack only when you need it.
+
+---
+
+## Start Here — Core Codec (30 seconds)
+
+```js
+const { encode, decode, inspect, hexDump } = require('human-readable-binary-protocol');
+
+// Encode any JS value to a compact binary Buffer
+const buf = encode({ name: 'Alice', age: 30, active: true });
+
+// Decode back to JS
+console.log(decode(buf));
+// { name: 'Alice', age: 30, active: true }
+
+// Human-readable tree — great for debugging
+console.log(inspect(buf));
+// { (3 pairs)
+//   S(4) "name"
+//     S(5) "Alice"
+//   S(3) "age"
+//     I 30
+//   S(6) "active"
+//     T true
+// }
+
+// Hex dump — ASCII tags are visible in the rightmost column
+console.log(hexDump(buf));
+// 00000000  7b 00 00 00 03 53 00 00  00 04 6e 61 6d 65 53 00  |{....S....nameS.|
+// ...
+```
+
+**TypeScript** — full declarations are included:
+
+```ts
+import { encode, decode, inspect, hexDump } from 'human-readable-binary-protocol';
+const buf: Buffer = encode({ hello: 'world' });
+```
 
 ---
 
@@ -40,13 +87,17 @@ On top of the core codec sits a complete production stack: TCP transport, RPC la
 4. [Wire Format](#wire-format)
 5. [Installation](#installation)
 6. [Quick Start](#quick-start)
-7. [CLI Reference](#cli-reference)
-8. [API Reference](#api-reference)
-9. [Language Ports](#language-ports)
-10. [Performance](#performance)
-11. [Running Tests](#running-tests)
-12. [Project Structure](#project-structure)
-13. [Credits](#credits)
+7. [Interoperability Bridges](#interoperability-bridges)
+8. [TypeScript](#typescript)
+9. [Browser Support](#browser-support)
+10. [Deno Support](#deno-support)
+11. [CLI Reference](#cli-reference)
+12. [API Reference](#api-reference)
+13. [Language Ports](#language-ports)
+14. [Performance](#performance)
+15. [Running Tests](#running-tests)
+16. [Project Structure](#project-structure)
+17. [Credits](#credits)
 
 ---
 
@@ -552,6 +603,221 @@ const cfg = await store.get('config'); // { maxConns: 100 }
 
 ---
 
+## Interoperability Bridges
+
+Move data between HRBP and other serialization formats without committing fully to the HRBP wire format.
+
+### JSON ↔ HRBP
+
+```js
+const { jsonToHRBP, hrbpToJSON } = require('human-readable-binary-protocol');
+
+// JSON string → HRBP Buffer
+const buf = jsonToHRBP('{"name":"Alice","age":30}');
+
+// HRBP Buffer → JSON string
+const json = hrbpToJSON(buf);                // '{"name":"Alice","age":30}'
+const pretty = hrbpToJSON(buf, true);        // formatted JSON
+
+// Pass a pre-parsed JS object
+const buf2 = jsonToHRBP({ items: [1, 2, 3] });
+```
+
+Errors:
+
+```js
+jsonToHRBP('{bad json}');    // throws SyntaxError: "jsonToHRBP: invalid JSON input — ..."
+hrbpToJSON('not a buffer');  // throws TypeError: "hrbpToJSON: first argument must be a Buffer"
+hrbpToJSON(Buffer.from([0xff])); // throws RangeError (malformed HRBP)
+```
+
+---
+
+### MessagePack ↔ HRBP
+
+**Without a runtime dependency** (value-level helpers):
+
+```js
+const { msgpackValueToHRBP, hrbpToMsgpackValue } = require('human-readable-binary-protocol');
+
+const buf = msgpackValueToHRBP({ hello: 'world' });
+const val = hrbpToMsgpackValue(buf); // { hello: 'world' }
+```
+
+**With a codec** (full encode/decode bridge):
+
+```js
+const msgpack = require('@msgpack/msgpack'); // or msgpack-lite / msgpack5
+const { createMsgpackBridge } = require('human-readable-binary-protocol');
+
+const bridge = createMsgpackBridge(msgpack);
+
+// MessagePack Buffer → HRBP Buffer
+const mpBuf   = msgpack.encode({ hello: 'world' });
+const hrbpBuf = bridge.msgpackToHRBP(mpBuf);
+
+// HRBP Buffer → MessagePack Buffer
+const mpOut = bridge.hrbpToMsgpack(hrbpBuf);
+```
+
+`createMsgpackBridge` accepts any codec that exposes `encode(value)` and `decode(buffer)`.
+`Uint8Array` payloads (Protobuf `bytes` or MessagePack `bin` types) are automatically
+converted to Node.js `Buffer` instances so HRBP encodes them as `BUFFER` values.
+
+---
+
+### Protobuf ↔ HRBP (partial bridge)
+
+The bridge works via the plain-object boundary that Protobuf libraries expose through
+`.toObject()` / `fromObject()`.  No `.proto` file or generated code is needed on the
+HRBP side.
+
+```js
+const protobuf = require('protobufjs');
+const { protobufValueToHRBP, hrbpToProtobufValue } = require('human-readable-binary-protocol');
+
+const root = await protobuf.load('my_schema.proto');
+const MyMessage = root.lookupType('MyMessage');
+
+// Protobuf → HRBP
+const msg     = MyMessage.decode(protoBytes);
+const hrbpBuf = protobufValueToHRBP(msg.toObject());
+
+// HRBP → plain object → Protobuf
+const obj  = hrbpToProtobufValue(hrbpBuf);
+const msg2 = MyMessage.fromObject(obj);
+```
+
+**What is supported vs not supported:**
+
+| Protobuf type | HRBP type | Notes |
+|---|---|---|
+| `string` | STRING | Lossless |
+| `bool` | TRUE/FALSE | Lossless |
+| `int32` / `sint32` | INT32 | Lossless within [-2³¹, 2³¹-1] |
+| `double` | FLOAT | Lossless |
+| `float` | FLOAT | float32 loses precision vs HRBP float64 |
+| `bytes` | BUFFER | Uint8Array → Buffer, lossless |
+| `repeated` | ARRAY | Lossless |
+| nested message | OBJECT | Keys are field names |
+| `int64` / `uint64` | FLOAT | JS number; loses precision > 2⁵³ |
+| `oneof` | (set field only) | Not preserved as a semantic — just the populated field |
+| enums | INT32 | Values encoded as their integer representation |
+
+---
+
+## TypeScript
+
+TypeScript declarations are included in the package — no `@types/` install needed.
+
+```ts
+import {
+  encode, decode, inspect, hexDump,
+  jsonToHRBP, hrbpToJSON,
+  msgpackValueToHRBP, hrbpToMsgpackValue, createMsgpackBridge,
+  protobufValueToHRBP, hrbpToProtobufValue,
+  MsgpackCodec, MsgpackBridge,
+  IncompleteBufferError,
+} from 'human-readable-binary-protocol';
+
+const buf: Buffer    = encode({ x: 1 });
+const val: unknown   = decode(buf);
+const tree: string   = inspect(buf);
+const hex: string    = hexDump(buf);
+const json: string   = hrbpToJSON(buf, true);
+```
+
+The `types` field in `package.json` points to `index.d.ts` at the package root.
+
+---
+
+## Browser Support
+
+The **core codec** (`encode`, `decode`, `inspect`, `hexDump`) runs in any modern browser
+because it only uses standard JavaScript (`Buffer` is polyfilled by bundlers, or you can
+use `Uint8Array` directly).
+
+### With a bundler (webpack / Rollup / Vite / esbuild)
+
+```js
+// Works out of the box — bundlers auto-polyfill Buffer via the `buffer` package.
+import { encode, decode, inspect, hexDump,
+         jsonToHRBP, hrbpToJSON } from 'human-readable-binary-protocol';
+
+const buf = encode({ hello: 'browser' });
+console.log(decode(buf)); // { hello: 'browser' }
+```
+
+If you see a "Buffer is not defined" error, add the polyfill explicitly:
+
+```sh
+npm install buffer
+```
+
+```js
+import { Buffer } from 'buffer';
+globalThis.Buffer = Buffer;
+```
+
+### Without a bundler (CDN / ESM script tag)
+
+```html
+<script type="module">
+  // Use a CDN that serves ESM — e.g. esm.sh or jsDelivr
+  import { encode, decode } from 'https://esm.sh/human-readable-binary-protocol';
+  const buf = encode({ hello: 'world' });
+  console.log(decode(buf));
+</script>
+```
+
+**What works in the browser:** `encode`, `decode`, `decodeAll`, `inspect`, `hexDump`,
+`encodeVersioned`, `decodeVersioned`, all schema helpers, streaming decoder, and all
+interop bridge helpers.
+
+**What requires Node.js:** TCP transport (`HRBPServer`, `HRBPClient`), TLS, filesystem
+persistence (WAL / StateStore), and the CLI.
+
+---
+
+## Deno Support
+
+HRBP works in Deno via npm compatibility mode (Deno ≥ 1.28) or directly via `esm.sh`.
+
+### Via npm compatibility (recommended for Node-style code)
+
+```ts
+// deno.json — add to imports
+// "human-readable-binary-protocol": "npm:human-readable-binary-protocol@1.0.0"
+
+import { encode, decode, inspect } from 'human-readable-binary-protocol';
+
+const buf = encode({ hello: 'deno' });
+console.log(decode(buf));       // { hello: 'deno' }
+console.log(inspect(buf));
+```
+
+Run with:
+
+```sh
+deno run --allow-read main.ts
+```
+
+### Via esm.sh (zero install)
+
+```ts
+import { encode, decode } from 'https://esm.sh/human-readable-binary-protocol';
+
+const buf = encode([1, 2, 3]);
+console.log(decode(buf)); // [1, 2, 3]
+```
+
+**Limitations in Deno:**
+- `Buffer` is polyfilled automatically by Deno's npm compatibility layer.
+- TCP transport and TLS modules use Node.js `net`/`tls` — these work in Deno's Node compatibility mode but are untested for production use.
+- The `hrbp` CLI is Node.js-only; use `deno run` with the API instead.
+
+---
+
 ## CLI Reference
 
 ### `hrbp --help`
@@ -1052,6 +1318,10 @@ Human-Readable-Binary-Protocol/
 |   +-- cluster.js             <- ConsistentHash / ClusterCoordinator
 |   +-- persistence.js         <- WAL / RegistryStore / StateStore
 |   +-- config.js              <- Config (env + file overlay)
+|   +-- interop/
+|   |   +-- json.js            <- jsonToHRBP() / hrbpToJSON()
+|   |   +-- msgpack.js         <- msgpackValueToHRBP() / createMsgpackBridge()
+|   |   +-- protobuf.js        <- protobufValueToHRBP() / hrbpToProtobufValue()
 |   +-- tcp/
 |   |   +-- server.js          <- HRBPServer
 |   |   +-- client.js          <- HRBPClient
@@ -1078,7 +1348,7 @@ Human-Readable-Binary-Protocol/
 +-- bin/
 |   +-- hrbp.js                <- DevTools CLI
 |
-+-- tests/                     362 tests, Node.js built-in runner, zero deps
++-- tests/                     362+ tests, Node.js built-in runner, zero deps
 |   +-- encoder.test.js        decoder.test.js      inspector.test.js
 |   +-- schema.test.js         versioned.test.js    compress.test.js
 |   +-- stream.test.js         tcp.test.js          rpc.test.js
@@ -1086,6 +1356,7 @@ Human-Readable-Binary-Protocol/
 |   +-- observability.test.js  discovery.test.js    cluster.test.js
 |   +-- persistence.test.js    chaos.test.js        config.test.js
 |   +-- cli.test.js            e2e.test.js          scenarios.test.js
+|   +-- interop.test.js        <- JSON / MessagePack / Protobuf bridges
 |
 +-- ports/
 |   +-- python/hrbp.py         <- pure-Python codec
@@ -1097,6 +1368,7 @@ Human-Readable-Binary-Protocol/
 |
 +-- SPEC.md                    <- wire format specification
 +-- BENCHMARKS.md              <- benchmark results
++-- index.d.ts                 <- TypeScript declarations
 ```
 
 ---

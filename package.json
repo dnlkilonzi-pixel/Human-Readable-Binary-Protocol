@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "A protocol that is binary (fast) AND human-readable/debuggable",
   "main": "src/index.js",
+  "types": "index.d.ts",
   "bin": {
     "hrbp": "bin/hrbp.js"
   },

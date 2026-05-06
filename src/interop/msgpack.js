@@ -54,7 +54,7 @@ const { decode } = require('../decoder');
  * @returns {Buffer}
  */
 function msgpackValueToHRBP(value) {
-  return encode(value);
+  return encode(normaliseUint8Arrays(value));
 }
 
 /**
