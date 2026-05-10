@@ -250,3 +250,152 @@ An implementation is conformant if it:
 3. Raises an error for unknown tag bytes.
 4. Raises an error for truncated payloads.
 5. Decodes versioned frames and rejects unsupported versions.
+
+---
+
+## Version Negotiation
+
+### Normative rules
+
+When communicating over a shared channel (TCP stream, file, IPC pipe), both
+parties MUST agree on a version before sending payload data.
+
+1. **Sender** MUST wrap every top-level value in a versioned frame
+   (`encodeVersioned`) when version negotiation is required.
+2. **Receiver** MUST read the `H` (0x48) header byte and the one-byte version
+   field before attempting to decode the payload.
+3. If the received version is **≤ MAX_SUPPORTED_VERSION**, the receiver MUST
+   decode the payload normally.
+4. If the received version is **> MAX_SUPPORTED_VERSION**, the receiver MUST
+   reject the frame with an error and SHOULD NOT attempt to decode the payload.
+5. A receiver that only understands version 1 MAY still parse version-1 frames
+   embedded inside a higher-version envelope if the higher version specifies
+   backward-compatible framing.
+
+### Negotiation handshake (RECOMMENDED pattern)
+
+```
+Client                      Server
+  |--- H v=1 { probe } ---->|
+  |<-- H v=1 { ok }  -------|  (server echos back its own max version)
+  |                          |
+  |--- H v=1 { payload } --->|
+```
+
+Both sides SHOULD send a probe frame on connect and use the lower of the two
+advertised versions for the rest of the session.
+
+---
+
+## Backward Compatibility Policy
+
+### Guarantees (v1 and beyond)
+
+1. **Wire stability** — the byte layout for all v1 type tags (`I`, `F`, `S`,
+   `T`, `X`, `N`, `[`, `{`, `B`, `H`) is **frozen**.  No v1 tag will ever be
+   reused for a different type.
+2. **Additive-only changes** — new type tags MAY be introduced in future
+   versions by reserving a byte value in the tag table.  Existing tags will
+   not change meaning.
+3. **Version field** — the `H` frame version byte guarantees that decoders can
+   detect new wire format versions and reject them gracefully instead of
+   silently misinterpreting data.
+4. **Opt-in extensions** — features that require new wire bytes (e.g. a new
+   numeric type) MUST be gated behind an incremented version number.
+
+### Policy for breaking changes
+
+A change is considered **breaking** if it:
+
+- Alters the byte layout of any existing tag.
+- Reuses an existing tag byte for a different semantic.
+- Changes endianness or field widths for existing types.
+
+Breaking changes MUST increment the version number and MUST be clearly
+documented in both SPEC.md and CHANGELOG entries.
+
+### Deprecation path
+
+Deprecated features SHOULD be marked in this document, continue to work for
+at least one full major version, and be removed only with a version bump and
+migration notes.
+
+---
+
+## Canonical Encoding Rules
+
+Implementations SHOULD produce **canonical** (deterministic) output to make
+encoded buffers comparable byte-for-byte across runtimes, languages, and time.
+
+### Rules
+
+1. **Integer selection** — if a number is an integer in [−2³¹, 2³¹−1] it MUST
+   be encoded as INT32 (`I`).  It MUST NOT be encoded as FLOAT.
+2. **Float selection** — numbers outside the INT32 range, non-integer numbers,
+   NaN, and ±Infinity MUST be encoded as FLOAT (`F`).
+3. **String encoding** — strings MUST be encoded as UTF-8.  Byte-order marks
+   (U+FEFF) SHOULD be stripped before encoding.
+4. **Object key order** — for canonical output, object keys MUST be sorted
+   lexicographically by their UTF-8 byte sequences before encoding.
+   (Non-canonical implementations MAY omit sorting; recipients MUST NOT depend
+   on key order for correctness.)
+5. **Null representation** — JavaScript `undefined` MUST be encoded as NULL
+   (`N`), matching the behavior of `null`.
+6. **No redundant wrappers** — a value MUST NOT be double-encoded (e.g.
+   encoding an already-encoded HRBP Buffer as a BUFFER containing another
+   HRBP payload, unless that is the intended semantics).
+
+### Canonical encoding and deduplication
+
+Two values are considered **byte-equal** if and only if all of the above
+canonical rules are applied before encoding.  Cache keys, content hashes, and
+deduplication indexes MAY rely on byte-equality of canonical HRBP output.
+
+---
+
+## Security Considerations
+
+### Malformed and truncated data
+
+1. Decoders MUST NOT attempt to read past the end of the supplied buffer.
+   Every length field (`uint32`) MUST be validated before advancing the read
+   cursor.  Violation raises an `IncompleteBufferError` (extends `RangeError`).
+2. Decoders MUST reject unknown tag bytes immediately rather than skipping them,
+   to prevent silent data loss.
+3. Decoders MUST NOT interpret an unrecognized tag byte as a no-op.
+
+### Resource limits
+
+4. **String and buffer length** — the `uint32` length field allows values up
+   to 4 GiB.  Implementations SHOULD enforce a configurable maximum payload
+   size (e.g. 64 MiB by default) and MUST document the limit.
+5. **Array and object element counts** — similarly capped by `uint32`.
+   Deeply nested or extremely large collections can exhaust heap memory.
+   Implementations SHOULD enforce a configurable maximum nesting depth
+   (RECOMMENDED default: 64) and a maximum element count per collection.
+6. **Recursion depth** — recursive decoders MUST guard against stack overflow
+   from adversarially nested structures.  Implementations SHOULD use an
+   explicit depth counter rather than relying on the call stack.
+
+### Attacker-controlled payloads
+
+7. **Denial of service via length fields** — an attacker can craft a buffer
+   where a `uint32` length field claims a very large value.  Decoders MUST
+   check that the claimed length does not exceed both the remaining buffer
+   length and the configured maximum before allocating memory.
+8. **Hash-flooding via object keys** — object keys are arbitrary strings.
+   Implementations backed by hash maps SHOULD use hash-randomisation (Node.js
+   V8 does this by default) or limit the number of keys per object.
+9. **Prototype pollution** — when decoding into plain JavaScript objects,
+   implementations MUST NOT allow keys such as `__proto__`, `constructor`, or
+   `prototype` to modify the host object's prototype chain.  The reference
+   implementation creates plain objects via `{}` literal which is safe in V8,
+   but implementors in other languages MUST audit their object construction.
+10. **Signed integer overflow** — INT32 values arriving from an untrusted
+    source MUST be treated as signed 32-bit integers in the range
+    [−2 147 483 648, 2 147 483 647].  Out-of-range values indicate a malformed
+    frame and MUST be rejected.
+11. **Versioned frame injection** — a malicious peer could send a frame with a
+    future version number to force the receiver into an error path.
+    Implementations SHOULD log and rate-limit such failures rather than crashing.
+

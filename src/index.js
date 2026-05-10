@@ -80,6 +80,11 @@ const { WAL, RegistryStore, StateStore } = require('./persistence');
 // Configuration
 const { Config, deepMerge } = require('./config');
 
+// Interoperability bridges
+const { jsonToHRBP, hrbpToJSON } = require('./interop/json');
+const { msgpackValueToHRBP, hrbpToMsgpackValue, createMsgpackBridge } = require('./interop/msgpack');
+const { protobufValueToHRBP, hrbpToProtobufValue } = require('./interop/protobuf');
+
 module.exports = {
   // Core
   encode, decode, decodeAll,
@@ -126,4 +131,8 @@ module.exports = {
   Config, deepMerge,
   // Error types
   IncompleteBufferError,
+  // Interoperability bridges
+  jsonToHRBP, hrbpToJSON,
+  msgpackValueToHRBP, hrbpToMsgpackValue, createMsgpackBridge,
+  protobufValueToHRBP, hrbpToProtobufValue,
 };
